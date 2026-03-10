@@ -1,0 +1,260 @@
+# ─── Test Deployments for K8s Agent Testing ──────────────────────────────────
+# Deploy with: kubectl apply -f test-deployments.yaml
+# Delete with: kubectl delete -f test-deployments.yaml
+
+---
+# 1. Nginx - simple healthy web server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-demo
+  namespace: nginx
+  labels:
+    app: nginx-demo
+    env: test
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-demo
+  template:
+    metadata:
+      labels:
+        app: nginx-demo
+        env: test
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-demo-svc
+  namespace: nginx
+spec:
+  selector:
+    app: nginx-demo
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+
+---
+# 2. Redis - database pod
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-demo
+  namespace: redis
+  labels:
+    app: redis-demo
+    env: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-demo
+  template:
+    metadata:
+      labels:
+        app: redis-demo
+        env: test
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-demo-svc
+  namespace: redis
+spec:
+[O  selector:
+    app: redis-demo
+  ports:
+  - port: 6379
+    targetPort: 6379
+  type: ClusterIP
+
+---
+# 3. Log generator - produces INFO/WARN/ERROR logs continuously
+#    Great for testing: "analyze logs for pod demo-logger-xxx"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-logger
+  namespace: default
+  labels:
+    app: demo-logger
+    env: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-logger
+  template:
+    metadata:
+      labels:
+        app: demo-logger
+        env: test
+    spec:
+      containers:
+      - name: logger
+        image: busybox:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          i=0
+          while true; do
+            i=$((i+1))
+            echo "$(date '+%Y-%m-%dT%H:%M:%S') [INFO]  Request processed successfully — count=$i"
+            echo "$(date '+%Y-%m-%dT%H:%M:%S') [INFO]  Database query OK — latency=12ms"
+            if [ $((i % 5)) -eq 0 ]; then
+              echo "$(date '+%Y-%m-%dT%H:%M:%S') [WARN]  Response time elevated — latency=250ms"
+            fi
+            if [ $((i % 10)) -eq 0 ]; then
+              echo "$(date '+%Y-%m-%dT%H:%M:%S') [ERROR] Connection timeout — retrying in 5s"
+              echo "$(date '+%Y-%m-%dT%H:%M:%S') [ERROR] Failed to reach upstream service"
+            fi
+            sleep 2
+          done
+        resources:
+          requests:
+            memory: "8Mi"
+            cpu: "10m"
+          limits:
+            memory: "16Mi"
+            cpu: "50m"
+
+---
+# 4. Crash-loop pod - for testing health checks and restart detection
+#    This pod will restart repeatedly (CrashLoopBackOff)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop-demo
+  namespace: default
+  labels:
+    app: crashloop-demo
+    env: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop-demo
+  template:
+    metadata:
+      labels:
+        app: crashloop-demo
+        env: test
+    spec:
+      containers:
+      - name: crasher
+        image: busybox:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "[INFO] App starting up..."
+          echo "[INFO] Loading configuration..."
+          sleep 5
+          echo "[ERROR] Fatal: could not connect to database"
+          echo "[ERROR] Shutting down with exit code 1"
+          exit 1
+        resources:
+          requests:
+            memory: "8Mi"
+            cpu: "10m"
+          limits:
+            memory: "16Mi"
+            cpu: "50m"
+
+---
+# 5. Python app - multi-container pod (app + sidecar)
+#    Good for testing: "get logs for pod python-app-xxx --container sidecar"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-app
+  namespace: demo
+  labels:
+    app: python-app
+    env: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-app
+  template:
+    metadata:
+      labels:
+        app: python-app
+        env: test
+    spec:
+      containers:
+      - name: app
+        image: python:3.11-slim
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          python3 -c "
+          import time, random, datetime
+          levels = ['INFO', 'INFO', 'INFO', 'WARN', 'ERROR']
+          msgs = [
+            'Request handled OK',
+            'Cache hit ratio: 87%',
+            'Processing batch job',
+            'Memory usage above 70%',
+            'Unhandled exception in worker thread',
+          ]
+          i = 0
+          while True:
+              i += 1
+              lvl = random.choice(levels)
+              msg = random.choice(msgs)
+              print(f'{datetime.datetime.now().isoformat()} [{lvl}] {msg} id={i}', flush=True)
+              time.sleep(3)
+          "
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+      - name: sidecar
+        image: busybox:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          while true; do
+            echo "$(date) [sidecar] health check OK"
+            echo "$(date) [sidecar] metrics scraped"
+            sleep 10
+          done
+        resources:
+          requests:
+            memory: "8Mi"
+            cpu: "10m"
+          limits:
+            memory: "16Mi"
+            cpu: "20m"

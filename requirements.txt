@@ -1,0 +1,12 @@
+# Core Strands + AWS Bedrock
+strands-agents>=0.1.0
+boto3>=1.34.0
+
+# Kubernetes client
+kubernetes>=29.0.0
+
+# Temporal
+temporalio>=1.5.0
+
+# Utilities
+python-dotenv>=1.0.0
